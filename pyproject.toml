@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "surgfm-probe"
+version = "0.1.0"
+description = "Feature extraction and linear probing for DINOv3-format ViT backbones"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE.md" }
+dependencies = [
+    "torch>=2.1",
+    "torchvision",
+    "numpy",
+    "pillow",
+]
+
+[project.optional-dependencies]
+video = ["opencv-python-headless"]
+progress = ["tqdm"]
+test = ["pytest", "scikit-learn", "opencv-python-headless"]
+
+[project.scripts]
+surgfm-probe = "surgfm_probe.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["surgfm_probe*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
