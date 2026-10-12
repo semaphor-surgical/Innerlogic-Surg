@@ -30,6 +30,15 @@ def test_extract_features_example(tmp_path, tiny_checkpoint, image_dir):
     assert "dense patch features" in stdout
 
 
+def test_use_as_encoder_example(tiny_checkpoint):
+    frozen = _run("use_as_encoder.py", "--checkpoint", tiny_checkpoint, "--num-classes", 3)
+    full = _run("use_as_encoder.py", "--checkpoint", tiny_checkpoint, "--num-classes", 3, "--finetune")
+    n_frozen = int(frozen.split("parameters:")[1].split()[0].replace(",", ""))
+    n_full = int(full.split("parameters:")[1].split()[0].replace(",", ""))
+    assert n_frozen == 64 * 3 + 3  # only the 1x1 conv head trains
+    assert n_full > n_frozen
+
+
 def test_linear_probe_features_example(tmp_path, tiny_checkpoint, image_dir):
     root, rows = image_dir
     manifest = tmp_path / "m.json"

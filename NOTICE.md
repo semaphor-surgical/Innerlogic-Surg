@@ -10,3 +10,7 @@ The checkpoints this package is meant to load are in DINOv3 format and are subje
 
 The rest of the package (feature extraction, data handling, linear-probe protocol, CLI) is new code. It is
 distributed together with the DINOv3-derived parts under the same license (see `LICENSE.md`).
+
+`surgfm_probe.load_anyup` optionally loads the AnyUp feature upsampler (https://github.com/wimmerth/anyup, CC BY 4.0)
+through `torch.hub`. AnyUp's code and weights are not part of this repository and are not covered by the DINOv3
+License; they are downloaded from their own repository at the user's request.

@@ -13,6 +13,7 @@ from surgfm_probe import (
     eval_transform,
     extract_dataset,
     list_images,
+    load_anyup,
     load_backbone,
     save_features,
 )
@@ -23,6 +24,7 @@ def main():
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--images", required=True)
     ap.add_argument("--out", default="features.npz")
+    ap.add_argument("--anyup", action="store_true", help="also upsample the dense features with AnyUp (needs network)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,6 +39,9 @@ def main():
     image, _ = dataset[0]
     dense = extractor.dense(image.unsqueeze(0).to(device))
     print("dense patch features of the first image:", tuple(dense.shape))
+    if args.anyup:
+        sharp = extractor.dense(image.unsqueeze(0).to(device), upsampler=load_anyup(device=device))
+        print("AnyUp-upsampled dense features:", tuple(sharp.shape))
 
 
 if __name__ == "__main__":

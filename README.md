@@ -1,157 +1,95 @@
-# surgfm-probe
+# Innerlogic-Surg
 
-Feature extraction and linear probing for the InnerLogic surgical vision foundation models
-(ViT-B/16 and ViT-L/16 backbones in DINOv3 format).
-
-- **Extract features** from image folders, manifests or videos with one command or three lines of Python.
-- **Get dense patch features** for your own segmentation, tracking or retrieval pipelines.
-- **Run a linear probe** with the same protocol that produced the reported frame-level classification scores.
-- **Standalone**: inference-only model code is vendored, so the only requirements are PyTorch, torchvision, NumPy and Pillow.
-
-## Contents
-
-1. [Install](#install)
-2. [Checkpoints](#checkpoints)
-3. [Feature extraction](#feature-extraction)
-4. [Linear probing](#linear-probing)
-5. [Reproducing the reported results](#reproducing-the-reported-results)
-6. [Verification](#verification)
-7. [Scope](#scope)
-8. [License](#license)
+Surgical vision foundation models (ViT-B/16 and ViT-L/16, DINOv3 format) with tools to extract features,
+run linear probes, and use the backbone as an encoder inside your own models. The only requirements are
+PyTorch, torchvision, NumPy and Pillow.
 
 ## Install
 
 ```bash
 git clone <this repository>
-cd surg_fm_probe
-pip install -e .                  # torch, torchvision, numpy, pillow
-pip install -e ".[video,progress]" # optional: video decoding (OpenCV) and progress bars
-pip install -e ".[test]"          # optional: test dependencies
+cd Innerlogic-Surg
+pip install -e .                    # torch, torchvision, numpy, pillow
+pip install -e ".[video,progress]"  # optional: video decoding (OpenCV), progress bars
 ```
 
 Python 3.9+ and PyTorch 2.1+. A GPU is recommended; everything also runs on CPU.
 
 ## Checkpoints
 
-| Model | File | Embedding dim | Descriptor dim (default) |
+| Model | File | Embedding dim | Descriptor dim |
 |---|---|---|---|
 | ViT-B/16 | `dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth` | 768 | 1536 |
 | ViT-L/16 | `dinov3_vitl16_pretrain_innerlogic_surg-22622135.pth` | 1024 | 2048 |
 
-The 8-hex suffix of each file name is the start of its SHA-256 (`sha256sum <file> | cut -c1-8`).
-Download links: *to be added at release.*
+The 8-hex suffix is the start of the file's SHA-256. Download links: *to be added at release.*
+A checkpoint is a flat backbone `state_dict` with DINOv3 key names; the architecture is inferred from it.
 
-A checkpoint is a flat backbone `state_dict`. The architecture (size, number of heads, FFN type) is
-inferred from the tensors, so `--arch` is normally not needed. Wrapped checkpoints
-(`{"model": ...}`, `{"teacher": ...}`) are unwrapped automatically.
-
-## Feature extraction
-
-### Python
+## Extract features
 
 ```python
-import torch
 from PIL import Image
 from surgfm_probe import FeatureExtractor, eval_transform, load_backbone
 
-backbone = load_backbone("dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth", device="cuda")
-extractor = FeatureExtractor(backbone)            # frozen, eval mode
-transform = eval_transform()                      # resize 256 (bicubic) -> center crop 224 -> normalize
+extractor = FeatureExtractor(load_backbone("dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth", device="cuda"))
+transform = eval_transform()        # resize 256 (bicubic) -> center crop 224 -> ImageNet mean/std
 
-image = transform(Image.open("frame.png").convert("RGB")).unsqueeze(0).cuda()
-descriptor = extractor(image)                     # (1, 1536) float32
-dense = extractor.dense(image)                    # (1, 768, 14, 14) patch features, last block
+x = transform(Image.open("frame.png").convert("RGB")).unsqueeze(0).cuda()
+descriptor = extractor(x)           # (1, 1536) pooled image descriptor
+dense = extractor.dense(x)          # (1, 768, 14, 14) patch feature map
 ```
 
-A folder or manifest in one call:
-
-```python
-from surgfm_probe import ImageDataset, extract_dataset, list_images, save_features
-
-dataset = ImageDataset(list_images("frames/"), transform=transform)
-features, _ = extract_dataset(extractor, dataset, batch_size=128, num_workers=8)
-save_features("frames.npz", features, paths=[str(p) for p in dataset.samples])
-```
-
-Per-frame features for a video (needs the `video` extra):
-
-```python
-from surgfm_probe import extract_video
-out = extract_video(extractor, "case.mp4", transform, fps=1.0)
-out["features"], out["frame_index"], out["time_s"]
-```
-
-### Command line
+Command line (folders, manifests or videos; writes an `.npz`, read back with `surgfm_probe.load_features`):
 
 ```bash
-surgfm-probe extract --checkpoint vitb.pth --images frames/        --out frames.npz
+surgfm-probe extract --checkpoint vitb.pth --images frames/ --out frames.npz
 surgfm-probe extract --checkpoint vitb.pth --manifest val.jsonl --root data/ --label-field phase.id --out val.npz
-surgfm-probe extract --checkpoint vitb.pth --video case.mp4 --fps 1 --out case.npz
+surgfm-probe extract --checkpoint vitb.pth --video case.mp4 --fps 1 --out case.npz     # needs the video extra
 ```
 
-`python -m surgfm_probe ...` is equivalent. The output `.npz` holds `features` (N x D, float32), a JSON `meta` string
-describing the settings, and `labels` / `paths` / `frame_index` / `time_s` where applicable. Read it back with
-`surgfm_probe.load_features`.
+The descriptor is `concat[CLS token, mean patch token]` of the last block (`2 x D`). `--n-last-blocks N` adds the
+CLS tokens of more blocks, `--no-avgpool` drops the mean-patch half, `--autocast bfloat16` runs in bf16
+(fp16 overflows in this backbone), and `--full-frame 224,384` resizes whole frames without cropping
+(sides must be multiples of 16). Scripts: `examples/extract_features.py`.
 
-### What the descriptor is
+### Pixel-resolution dense features (AnyUp)
 
-`descriptor = concat[ CLS token of the last n blocks, mean patch token of the last block ]`, with the final
-LayerNorm applied to every token. With the defaults (`n = 1`) it has `2 x D` dimensions. Options:
+The patch map is coarse (`H/16 x W/16`). Pass an [AnyUp](https://github.com/wimmerth/anyup) upsampler to lift it to
+pixel resolution, guided by the image:
 
-| Flag | Effect |
-|---|---|
-| `--n-last-blocks N` | CLS tokens of the last N blocks (descriptor size `D x (N + 1)`) |
-| `--no-avgpool` | drop the mean-patch-token half |
-| `--autocast bfloat16` | bf16 inference (about 1e-4 cosine difference to fp32); fp16 is rejected because this backbone overflows in it |
-| `--full-frame 224` / `--full-frame 224,384` | resize the whole frame (no crop); sides must be multiples of 16 |
+```python
+from surgfm_probe import load_anyup
 
-### Preprocessing
+upsampler = load_anyup(device="cuda")                        # public AnyUp weights, fetched on first use
+dense_hr = extractor.dense(x, upsampler=upsampler)           # (1, 768, 224, 224)
+dense_112 = extractor.dense(x, upsampler=upsampler, output_size=(112, 112), q_chunk_size=256)  # (1, 768, 112, 112), lower memory
+```
 
-The reported scores use `eval_transform(256, 224)`: bicubic resize of the short side to 256, center crop to 224,
-ImageNet mean/std normalization. The backbone uses rotary position embeddings, so non-square and larger inputs
-work (`--full-frame`), but scores were calibrated for the default.
+AnyUp is a separate project (Wimmer et al., CC BY 4.0) that is neither bundled nor retrained here. `load_anyup`
+downloads a pinned revision of its code and its pretrained weights through `torch.hub` (needs network access and
+Python 3.10+; the repository is trusted automatically, pass `trust_repo=False` to be asked first).
+`load_anyup("single_backbone")` selects the model from the AnyUp paper instead of the default multi-backbone one.
+`examples/extract_features.py --anyup` shows it end to end. Please cite the AnyUp paper if you use it.
 
-## Linear probing
+## Linear probe
 
-The probe trains a bank of linear heads on frozen descriptors, one per learning rate, and keeps the best one.
-
-### Data format
-
-A manifest lists images and labels. Three formats are accepted:
+Trains linear heads on frozen features of your own labeled frames and reports test accuracy.
+Datasets are not distributed here; write one manifest per split (JSON, JSONL or CSV):
 
 ```jsonc
-// JSON (list) or JSONL (one object per line); image paths are relative to --root
-{"image": "case01/000123.png", "phase": {"id": 3}}
+{"image": "case01/000123.png", "phase": {"id": 3}}      // image path is relative to --root
 ```
-
-```csv
-image,label
-case01/000123.png,3
-```
-
-The label is read with a dotted path (`--label-field phase.id`; for CSV `--label-field label`). Class ids are
-integers `0..C-1`. Multi-label targets (`--multi-label --num-classes C`) are lists of active class ids in JSON or
-`;`-separated ids in CSV, are trained with BCE loss, and are scored with macro-F1.
-
-### Run a probe
 
 ```bash
-surgfm-probe probe \
-    --checkpoint dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth \
+surgfm-probe probe --checkpoint vitb.pth \
     --train train.jsonl --val val.jsonl --test test.jsonl \
-    --root /path/to/images --label-field phase.id --num-classes 7 \
-    --output-dir runs/phase
+    --root /path/to/images --label-field phase.id --num-classes 7 --output-dir runs/phase
 ```
 
-Or with a benchmark preset (class count and selection split are filled in; see [Tasks](#tasks)):
-
-```bash
-surgfm-probe probe --task hyperkvasir --checkpoint vitb.pth \
-    --train train.jsonl --val val.jsonl --test test.jsonl --root /path/to/HyperKvasir \
-    --label-field label.id --output-dir runs/hyperkvasir
-```
-
-Python equivalent:
+The class id is read with a dotted path (`--label-field`) and must be an integer in `0..C-1`. Multi-label tasks use
+`--multi-label` (BCE loss, macro-F1). `--task NAME` fills in the class count and selection split for the 11 benchmark
+presets listed by `surgfm-probe tasks`. Results go to `results.json` (accuracy, F1, per-epoch metrics),
+`best_head.pt` and `run_args.json`. Python equivalent:
 
 ```python
 from surgfm_probe import (FeatureExtractor, ImageDataset, eval_transform, load_backbone,
@@ -165,100 +103,66 @@ result = probe_standard(extractor, make("train.jsonl", train_transform()),
 print(result.results["test_accuracy"], result.results["best_classifier"])
 ```
 
-### Protocol
+**Protocol.** 13 linear heads (one per learning rate, 1e-5 to 0.1) are trained at once with SGD (momentum 0.9,
+cosine schedule, lr scaled by batch/256), 10 epochs of 1250 iterations, batch size 256, seed 1234. The
+(epoch, head) pair with the best validation score is evaluated on test. `--protocol standard` (default) is the
+setting used for the reported frame-level scores: random-resized-crop and flip augmentation with the backbone
+running at every step. `--protocol cached` extracts features once and trains in minutes (also from
+`surgfm-probe extract` outputs via `--train-features/--val-features/--test-features`; see
+`examples/linear_probe_features.py`), but its scores differ from `standard` by up to a couple of points, so do
+not mix the two in one table.
 
-| | |
-|---|---|
-| Heads | 13 linear heads, learning rates 1e-5 ... 0.1 (`--lr-grid` to change), all trained at once on the same batches |
-| Head init | weights N(0, 0.01), bias 0 |
-| Optimizer | SGD, momentum 0.9, no weight decay (`--optimizer adamw` available), cosine schedule |
-| Learning-rate scaling | `lr x batch_size / 256` |
-| Schedule | 10 epochs x 1250 iterations, batch size 256 |
-| Selection | after every epoch, the (epoch, head) pair with the best validation score is kept; test is evaluated with it |
-| Metric | accuracy (single-label) or macro-F1 (multi-label); macro/weighted F1 are always reported too |
-| Seed | `--seed 1234` |
+If a dataset has no validation split, `--select-on-test` selects the head on the test images, which makes
+the score optimistic; the CLI warns and records `selection_split` in `results.json`.
 
-Two protocols are available:
+## Use as an encoder in your own model
 
-- **`--protocol standard`** (default): the backbone runs at every step on randomly resized crops with horizontal
-  flips. This is the protocol behind the reported scores. It needs a GPU and is bounded by image loading
-  (use `--num-workers`). Validation and test features are extracted once because they do not change.
-- **`--protocol cached`**: features are extracted once with the evaluation transform and the heads are trained on
-  them. It is much faster (minutes) and can start from `surgfm-probe extract` outputs
-  (`--train-features train.npz --val-features val.npz --test-features test.npz`), but its scores differ from
-  `standard` by up to a couple of points per task (lower on average). Do not mix the two protocols in one table.
+`load_backbone` returns a plain `torch.nn.Module` (float32, frozen, eval mode). It takes `(B, 3, H, W)`
+ImageNet-normalized images with `H` and `W` multiples of 16 (any size or aspect ratio) and exposes:
 
-### Outputs
+```python
+from surgfm_probe import FeatureExtractor, load_backbone
 
-`--output-dir` receives `results.json`, `best_head.pt` (the selected linear head) and `run_args.json`.
-`results.json` includes `best_val_accuracy`, `test_accuracy`, `test_f1_macro`, `test_f1_weighted`, `best_classifier`,
-per-epoch metrics, the protocol, the selection split, and the sizes of the splits. When a task has multi-label
-targets, `primary_metric` says that the field named `*_accuracy` holds macro-F1.
+backbone = load_backbone("vitb.pth", device="cuda")      # backbone.embed_dim, .patch_size, .n_blocks = 768, 16, 12
 
-### Tasks
-
-`surgfm-probe tasks` lists the presets for the eleven frame-level classification benchmarks:
-
-| `--task` | Benchmark | Classes | Head selected on |
-|---|---|---|---|
-| `cholec80-phase` | Cholec80 phase | 7 | test |
-| `autolaparo-phase` | AutoLaparo phase | 7 | val |
-| `multibypass-phase` | MultiBypass140 phase | 12 | val |
-| `multibypass-step` | MultiBypass140 step | 46 | val |
-| `pitvis-step` | PitVis step | 15 | val |
-| `hyperkvasir` | HyperKvasir | 23 | val |
-| `cholecinstanceseg` | CholecInstanceSeg instrument | 7 | test |
-| `heichole` | HeiChole instrument | 7 | test |
-| `sarrarp50` | SAR-RARP50 gesture | 7 | test |
-| `surgvu` | SurgVU instrument | 20 | test |
-| `lapgckvad` | LapGC-KVAD-30 anatomy | 15 | test |
-
-Datasets and annotations are **not** distributed here; obtain them from their original sources and write one
-manifest per split.
-
-**Selection on test.** Benchmarks without a validation split have no held-out data to select a head on. For these
-the head is selected on the same images that are reported, which makes the score optimistic. The CLI requires
-`--select-on-test` (or a task preset that implies it), prints a warning, and records `selection_split` in
-`results.json`. Prefer to carve out a validation split from your training data when you can.
-
-## Reproducing the reported results
-
-Test scores of the released checkpoints with `--protocol standard` (single run, seed 1234). `--` means the
-configuration has not been evaluated yet.
-
-| Model | ChPh | AuPh | MbPh | MbSt | PitV | HypK | ChIS | HeiC | SARr | SgVU | LapG |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| ViT-B/16 | 80.7 | 72.9 | 84.9 | 74.0 | 74.5 | 88.9 | 67.0 | 50.7 | 40.8 | 23.9 | 72.1 |
-| ViT-L/16 | -- | -- | -- | -- | 74.5 | 90.0 | 72.7 | 56.7 | 43.0 | 26.9 | 73.7 |
-
-ChPh, ChIS, HeiC, SARr, SgVU and LapG are selected on the test split (see above). Column names:
-ChPh = Cholec80 phase, AuPh = AutoLaparo phase, MbPh/MbSt = MultiBypass140 phase/step, PitV = PitVis step,
-HypK = HyperKvasir, ChIS = CholecInstanceSeg instrument, HeiC = HeiChole instrument, SARr = SAR-RARP50 gesture,
-SgVU = SurgVU instrument, LapG = LapGC-KVAD-30 anatomy. The metric is accuracy for all of them.
-
-Expect run-to-run differences of a few tenths of a point from augmentation randomness and GPU nondeterminism.
-
-Reproduction check: running this package on HyperKvasir with the ViT-B checkpoint (`--task hyperkvasir`,
-`--protocol standard`) gives 88.9 test / 89.9 validation accuracy, matching the 88.9 above. The `cached`
-protocol gives 89.7 test on the same task.
-
-## Verification
-
-```bash
-pytest                                                    # CPU tests, a few seconds
-
-# bit-exact comparison with the reference DINOv3 implementation
-python scripts/parity_check.py --dinov3-repo /path/to/dinov3 --checkpoint vitb.pth
+((fmap, cls),) = backbone.get_intermediate_layers(x, n=1, reshape=True, return_class_token=True)
+#   fmap: (B, D, H/16, W/16) patch feature map, cls: (B, D)  -> segmentation, detection, tracking, retrieval heads
+(tokens,) = backbone.get_intermediate_layers(x, n=1)
+#   tokens: (B, N, D) patch tokens                           -> transformer decoders, vision-language connectors
+maps = backbone.get_intermediate_layers(x, n=[2, 5, 8, 11], reshape=True)
+#   4 feature maps from block indices 2, 5, 8, 11 (ViT-L has 24 blocks: use [5, 11, 17, 23])  -> UPerNet / DPT-style decoders
+descriptor = FeatureExtractor(backbone)(x)               # (B, 2D) pooled descriptor, no gradients
+hr = upsampler(x, fmap)                                  # optional AnyUp upsampler (see above): (B, D, H, W)
 ```
 
-The parity script loads the checkpoint into both the reference model and the vendored one with `strict=True` and
-compares CLS tokens, patch tokens and the descriptor on square and non-square inputs. The maximum difference is 0
-for both released checkpoints.
+Wrap it as a submodule, frozen or fine-tuned end to end (the backbone has no dropout or BatchNorm, so
+`train()` and `eval()` behave the same):
 
-## Scope
+```python
+import torch
+from torch import nn
+from surgfm_probe import load_backbone
 
-This repository covers feature extraction and frame-level linear classification. Dense-prediction probes
-(segmentation, depth), clip-level probes (critical view of safety, triplets) and video probes are not included.
+class SurgEncoder(nn.Module):
+    def __init__(self, checkpoint, freeze=True):
+        super().__init__()
+        self.backbone = load_backbone(checkpoint)
+        self.dim, self.freeze = self.backbone.embed_dim, freeze
+        self.backbone.requires_grad_(not freeze)
+
+    def forward(self, x):
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not self.freeze):
+            ((fmap, cls),) = self.backbone.get_intermediate_layers(x, n=1, reshape=True, return_class_token=True)
+        return cls, fmap
+
+encoder = SurgEncoder("vitb.pth", freeze=True)           # freeze=False to fine-tune
+head = nn.Conv2d(encoder.dim, num_classes, 1)            # any head on top
+```
+
+A complete runnable version with a segmentation head and one training step is in
+`examples/use_as_encoder.py`. For reduced precision use `torch.autocast("cuda", dtype=torch.bfloat16)`
+(not fp16). The same checkpoint file also loads with `strict=True` into the official DINOv3
+`DinoVisionTransformer`.
 
 ## License
 

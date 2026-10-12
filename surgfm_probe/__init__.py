@@ -8,6 +8,7 @@ from .extract import extract_dataset, extract_video, load_features, save_feature
 from .features import FeatureExtractor
 from .probe import DEFAULT_LR_GRID, probe_features, probe_standard
 from .transforms import eval_transform, full_frame_transform, train_transform
+from .upsample import load_anyup
 
 __all__ = [
     "ARCHS",
@@ -20,6 +21,7 @@ __all__ = [
     "full_frame_transform",
     "load_backbone",
     "list_images",
+    "load_anyup",
     "load_features",
     "probe_features",
     "probe_standard",

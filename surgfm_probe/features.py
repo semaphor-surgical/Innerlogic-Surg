@@ -1,6 +1,6 @@
 """Frozen-backbone feature extractor."""
 
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from torch import Tensor, nn
@@ -62,8 +62,21 @@ class FeatureExtractor(nn.Module):
         return feats.float()
 
     @torch.no_grad()
-    def dense(self, images: Tensor) -> Tensor:
-        """(B, 3, H, W) -> (B, D, H/patch, W/patch) last-block patch features (float32)."""
+    def dense(
+        self,
+        images: Tensor,
+        upsampler: Optional[nn.Module] = None,
+        output_size: Optional[Tuple[int, int]] = None,
+        q_chunk_size: Optional[int] = None,
+    ) -> Tensor:
+        """(B, 3, H, W) -> (B, D, H/patch, W/patch) last-block patch features (float32).
+
+        With an `upsampler` (see `load_anyup`) the map is upsampled to `output_size`, by default the
+        input resolution, guided by the image; `q_chunk_size` trades speed for memory.
+        """
         with self._autocast_ctx(images.device.type):
             (patches,) = self.backbone.get_intermediate_layers(images, n=1, reshape=True)
-        return patches.float()
+        patches = patches.float()
+        if upsampler is None:
+            return patches
+        return upsampler(images.float(), patches, output_size=output_size, q_chunk_size=q_chunk_size)
