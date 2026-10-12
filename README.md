@@ -19,11 +19,11 @@ Python 3.9+ and PyTorch 2.1+. A GPU is recommended; everything also runs on CPU.
 
 | Model | File | Embedding dim | Descriptor dim |
 |---|---|---|---|
-| ViT-B/16 | [`dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth`](https://github.com/Flaick/Innerlogic-Surg/releases/download/v0.1.0/dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth) | 768 | 1536 |
-| ViT-L/16 | [`dinov3_vitl16_pretrain_innerlogic_surg-22622135.pth`](https://github.com/Flaick/Innerlogic-Surg/releases/download/v0.1.0/dinov3_vitl16_pretrain_innerlogic_surg-22622135.pth) | 1024 | 2048 |
+| ViT-B/16 | [`dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth`](https://github.com/semaphor-surgical/Innerlogic-Surg/releases/download/v0.1.0/dinov3_vitb16_pretrain_innerlogic_surg-a516a775.pth) | 768 | 1536 |
+| ViT-L/16 | [`dinov3_vitl16_pretrain_innerlogic_surg-22622135.pth`](https://github.com/semaphor-surgical/Innerlogic-Surg/releases/download/v0.1.0/dinov3_vitl16_pretrain_innerlogic_surg-22622135.pth) | 1024 | 2048 |
 
 The 8-hex suffix is the start of the file's SHA-256 (full hashes in `SHA256SUMS` on the
-[release page](https://github.com/Flaick/Innerlogic-Surg/releases/tag/v0.1.0)).
+[release page](https://github.com/semaphor-surgical/Innerlogic-Surg/releases/tag/v0.1.0)).
 A checkpoint is a flat backbone `state_dict` with DINOv3 key names; the architecture is inferred from it.
 
 ## Extract features
